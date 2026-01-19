@@ -1,6 +1,6 @@
 import re
 import httpx
-from selectolax.parser import HTMLParser
+from bs4 import BeautifulSoup
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
 
@@ -19,45 +19,51 @@ def _parse_price(text: str) -> Optional[float]:
         return None
 
 def _extract_listings(html: str) -> List[Dict]:
-    tree = HTMLParser(html)
-    items = []
+    soup = BeautifulSoup(html, "lxml")
+    items: List[Dict] = []
 
-    for a in tree.css("a"):
-        href = a.attributes.get("href", "")
-        if not href:
-            continue
+    # OLX listings URLs usually contain /d/oferta/
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
         if "/d/oferta/" not in href:
             continue
 
         url = href if href.startswith("http") else urljoin("https://www.olx.pl", href)
-        title = (a.text() or "").strip()
+        url = url.split("?")[0]
+
+        # Title: use visible text, but avoid empty/very short
+        title = a.get_text(" ", strip=True)
         if not title or len(title) < 5:
             continue
 
-        card = a.parent
-        for _ in range(5):
-            if card is None:
+        # Try to find price/location in the nearest card container
+        card = a
+        for _ in range(6):
+            if not card:
                 break
-            price_node = card.css_first("[data-testid='ad-price']")
-            loc_node = card.css_first("[data-testid='location-date']")
 
-            price = _parse_price(price_node.text().strip() if price_node else "")
+            price_el = card.find(attrs={"data-testid": "ad-price"})
+            loc_el = card.find(attrs={"data-testid": "location-date"})
+
+            price = _parse_price(price_el.get_text(" ", strip=True) if price_el else "")
             location = None
-            if loc_node:
-                location = loc_node.text().split("-")[0].strip()
+            if loc_el:
+                location = loc_el.get_text(" ", strip=True).split("-")[0].strip()
 
-            if price_node or loc_node:
+            if price_el or loc_el:
                 items.append(
                     {
-                        "url": url.split("?")[0],
+                        "url": url,
                         "title": title[:300],
                         "price_value": price,
                         "location": location[:200] if location else None,
                     }
                 )
                 break
+
             card = card.parent
 
+    # dedup by url
     seen = set()
     out = []
     for it in items:
@@ -85,6 +91,7 @@ def scrape_olx(olx_url: str, max_pages: int = 2) -> List[Dict]:
             if r.status_code in (403, 429):
                 break
             r.raise_for_status()
+
             results.extend(_extract_listings(r.text))
 
     final = {}

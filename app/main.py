@@ -3,7 +3,21 @@ import redis
 from fastapi import FastAPI
 from app.settings import settings
 from app.schemas import SearchRequest, SearchResponse, ListingOut, StateRequest
-from app.query_builder import build_olx_url
+from app.query_builder import     f = req.filters.model_dump()
+
+    # backward compat: if someone sends rooms as int, map to enum list
+    # (safe: your tg-bot can be updated later)
+    r = f.get("rooms")
+    if isinstance(r, int):
+        mapping = {1: "one", 2: "two", 3: "three", 4: "four"}
+        f["rooms"] = [mapping.get(r, "five_more")] if r else []
+
+    # backward compat: old field name price_max/price_min could come as price_value
+    if "price_max" not in f and "price_max" in req.filters.model_dump():
+        f["price_max"] = req.filters.model_dump().get("price_max")
+
+    olx_url = build_olx_url(f)
+
 from app.db import init_db, fetch_feed_and_mark_seen, mark_state
 from app.utils import new_uuid
 
